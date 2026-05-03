@@ -1,0 +1,41 @@
+app-id: io.github.frazier.Fuse
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: fuse
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --filesystem=home
+  - --device=dri
+  # Make the ffmpeg-full extension binaries available on PATH
+  - --env=PATH=/app/lib/ffmpeg:/app/bin:/usr/bin
+
+add-extensions:
+  org.freedesktop.Platform.ffmpeg-full:
+    directory: lib/ffmpeg
+    version: '24.08'
+    add-ld-path: .
+    no-autodownload: false
+    autodelete: false
+
+modules:
+  - name: fuse
+    buildsystem: simple
+    build-commands:
+      # Create the directory the ffmpeg-full extension will mount into
+      - mkdir -p /app/lib/ffmpeg
+      - install -Dm755 fuse.py /app/bin/fuse
+      - install -Dm644 io.github.frazier.Fuse.desktop
+          /app/share/applications/io.github.frazier.Fuse.desktop
+      - install -Dm644 io.github.frazier.Fuse.svg
+          /app/share/icons/hicolor/scalable/apps/io.github.frazier.Fuse.svg
+    sources:
+      - type: file
+        path: fuse.py
+      - type: file
+        path: io.github.frazier.Fuse.desktop
+      - type: file
+        path: io.github.frazier.Fuse.svg

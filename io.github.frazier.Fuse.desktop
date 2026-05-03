@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Fuse
+GenericName=Video Stitcher
+Comment=Stitch, rotate, and reencode video files
+Exec=fuse
+Icon=io.github.frazier.Fuse
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=video;ffmpeg;stitch;concat;rotate;reencode;fuse;
+StartupNotify=true

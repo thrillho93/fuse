@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <!-- Same gradient direction as MacTahoe app icons (lighter at top) -->
+    <linearGradient id="bg" x1="64" x2="64" y1="120" y2="8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1a6fd4"/>
+      <stop offset="1" stop-color="#60aaff"/>
+    </linearGradient>
+    <linearGradient id="fg" x1="64" x2="64" y1="112" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#cce4ff"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+  </defs>
+  <!-- Edge-to-edge rounded rect, MacTahoe-style corner radius (~22% of width) -->
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <!--
+    Filmstrip artwork: the video-x-generic-symbolic path from MacTahoe-dark,
+    scaled 6× and centered (16px margin each side → 96×96 content area).
+    Original path is 16×16 viewBox.
+  -->
+  <g transform="translate(16,16) scale(6)" fill="url(#fg)">
+    <path d="M1.75 1a.748.748 0 0 0-.75.75v13.5c0 .415.335.75.75.75h12.5c.416 0
+             .75-.335.75-.75V1.75a.748.748 0 0 0-.75-.75z
+             M2 2h1v1H2z
+             M4.5 2h7c.277 0 .5.223.5.5v5c0 .277-.223.5-.5.5h-7a.499.499 0 0
+             1-.5-.5v-5c0-.277.223-.5.5-.5z
+             M13 2h1v1h-1z
+             M2 4h1v1H2zm11 0h1v1h-1z
+             M2 6h1v1H2zm11 0h1v1h-1z
+             M2 8h1v1H2zm11 0h1v1h-1z
+             M4.5 9h7c.277 0 .5.223.5.5v5c0 .277-.223.5-.5.5h-7a.499.499 0 0
+             1-.5-.5v-5c0-.277.223-.5.5-.5z
+             M2 10h1v1H2zm11 0h1v1h-1z
+             M2 12h1v1H2zm11 0h1v1h-1z
+             M2 14h1v1H2zm11 0h1v1h-1z"/>
+  </g>
+</svg>
