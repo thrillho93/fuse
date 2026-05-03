@@ -9,7 +9,6 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,10 +18,16 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, GLib, GObject, Gtk  # noqa: E402
+gi.require_version("Gdk", "4.0")
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
-PREVIEW_DIR = Path(tempfile.mkdtemp(prefix="fuse-preview-"))
-atexit.register(lambda: shutil.rmtree(PREVIEW_DIR, ignore_errors=True))
+def _init_preview_dir() -> Path:
+    from gi.repository import GLib as _GLib
+    d = Path(_GLib.get_user_cache_dir()) / "fuse" / "previews"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+PREVIEW_DIR = _init_preview_dir()
 
 APP_ID = "io.github.frazier.Fuse"
 APP_NAME = "Fuse"
@@ -208,7 +213,7 @@ def build_preview_command(clip: Clip, out_path: Path) -> list[str]:
     elif clip.rotation == 270:
         chain.append("transpose=2")
     if settings["enhance"]:
-        chain.extend(["histeq=strength=0.4", "unsharp=5:5:1.5:5:5:0.0"])
+        chain.extend(["eq=contrast=1.2:brightness=0.04:saturation=1.15:gamma=0.88", "unsharp=3:3:0.8:3:3:0.0"])
     cmd = ["ffmpeg", "-y", "-v", "error"]
     if clip.trim_start > 0:
         cmd.extend(["-ss", f"{clip.trim_start}"])
@@ -219,6 +224,7 @@ def build_preview_command(clip: Clip, out_path: Path) -> list[str]:
         cmd.extend(["-vf", ",".join(chain)])
     cmd.extend([
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        "-t", "30",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart",
         str(out_path),
@@ -235,6 +241,33 @@ def preview_path_for(clip: Clip) -> Path:
         f"{clip.path}:{mtime}:{clip.rotation}:{clip.trim_start}:{clip.trim_end}".encode()
     ).hexdigest()[:16]
     return PREVIEW_DIR / f"{digest}.mp4"
+
+
+def thumbnail_path_for(clip: Clip) -> Path:
+    try:
+        mtime = int(Path(clip.path).stat().st_mtime)
+    except OSError:
+        mtime = 0
+    digest = hashlib.md5(
+        f"thumb:{clip.path}:{mtime}:{clip.rotation}".encode()
+    ).hexdigest()[:16]
+    return PREVIEW_DIR / f"thumb_{digest}.jpg"
+
+
+def build_thumbnail_command(clip: Clip, out_path: Path) -> list[str]:
+    cmd = ["ffmpeg", "-y", "-v", "error", "-i", clip.path]
+    chain = []
+    if clip.rotation == 90:
+        chain.append("transpose=1")
+    elif clip.rotation == 180:
+        chain.append("transpose=2,transpose=2")
+    elif clip.rotation == 270:
+        chain.append("transpose=2")
+    chain.append("scale=112:112:force_original_aspect_ratio=decrease")
+    chain.append("pad=112:112:(ow-iw)/2:(oh-ih)/2")
+    chain.append("setsar=1")
+    cmd.extend(["-vf", ",".join(chain), "-vframes", "1", "-q:v", "3", str(out_path)])
+    return cmd
 
 
 def probe_clip(path: str) -> tuple[int, int, float, bool, datetime | None]:
@@ -308,7 +341,7 @@ def build_ffmpeg_command(clips: list[Clip], output_path: str) -> list[str]:
         elif c.rotation == 270:
             chain.append("transpose=2")
         if settings["enhance"]:
-            chain.extend(["histeq=strength=0.4", "unsharp=5:5:1.5:5:5:0.0"])
+            chain.extend(["eq=contrast=1.2:brightness=0.04:saturation=1.15:gamma=0.88", "unsharp=3:3:0.8:3:3:0.0"])
         chain.append(f"scale={tw}:{th}:force_original_aspect_ratio=decrease")
         chain.append(f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2")
         chain.append("setsar=1")
@@ -660,6 +693,14 @@ class ClipRow(Adw.ActionRow):
         self.set_title(GLib.markup_escape_text(clip.name))
         self.set_subtitle(self._format_subtitle())
 
+        # Thumbnail frame
+        self.thumb_picture = Gtk.Picture()
+        self.thumb_picture.set_size_request(112, 112)
+        self.thumb_picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        self.thumb_picture.set_valign(Gtk.Align.CENTER)
+        self.thumb_picture.set_visible(False)
+        self.add_prefix(self.thumb_picture)
+
         up_btn = Gtk.Button.new_from_icon_name("go-up-symbolic")
         up_btn.set_valign(Gtk.Align.CENTER)
         up_btn.add_css_class("flat")
@@ -689,7 +730,8 @@ class ClipRow(Adw.ActionRow):
         self.trim_btn.connect("clicked", lambda _b: self._open_trim_dialog())
         self.add_suffix(self.trim_btn)
 
-        self.preview_btn = Gtk.Button.new_from_icon_name("media-playback-start-symbolic")
+        self.preview_btn = Gtk.Button()
+        self.preview_btn.set_child(Gtk.Image.new_from_icon_name("media-playback-start-symbolic"))
         self.preview_btn.set_valign(Gtk.Align.CENTER)
         self.preview_btn.add_css_class("flat")
         self.preview_btn.set_tooltip_text("Preview")
@@ -703,6 +745,19 @@ class ClipRow(Adw.ActionRow):
         del_btn.set_tooltip_text("Remove")
         del_btn.connect("clicked", lambda _b: self.window.remove_clip(self))
         self.add_suffix(del_btn)
+
+        # Drag-and-drop reordering
+        drag_source = Gtk.DragSource.new()
+        drag_source.set_actions(Gdk.DragAction.MOVE)
+        drag_source.connect("prepare", self._on_drag_prepare)
+        drag_source.connect("drag-begin", self._on_drag_begin)
+        self.add_controller(drag_source)
+
+        drop_target = Gtk.DropTarget.new(GObject.TYPE_BOOLEAN, Gdk.DragAction.MOVE)
+        drop_target.connect("drop", self._on_drop)
+        drop_target.connect("motion", self._on_drag_motion)
+        drop_target.connect("leave", self._on_drag_leave)
+        self.add_controller(drop_target)
 
     def _format_subtitle(self) -> str:
         audio = "audio" if self.clip.has_audio else "no audio"
@@ -727,9 +782,49 @@ class ClipRow(Adw.ActionRow):
         self.clip.trim_end = end
         self.set_subtitle(self._format_subtitle())
 
+    def _on_drag_prepare(self, source, x, y):
+        self.window._dragged_row = self
+        val = GObject.Value(GObject.TYPE_BOOLEAN, True)
+        return Gdk.ContentProvider.new_for_value(val)
+
+    def _on_drag_begin(self, source, drag):
+        icon = Gtk.DragIcon.get_for_drag(drag)
+        lbl = Gtk.Label(label=self.clip.name)
+        lbl.add_css_class("card")
+        lbl.set_margin_top(8)
+        lbl.set_margin_bottom(8)
+        lbl.set_margin_start(12)
+        lbl.set_margin_end(12)
+        icon.set_child(lbl)
+        source.set_hotspot(0, 0)
+
+    def _on_drop(self, target, value, x, y):
+        dragged = self.window._dragged_row
+        if dragged is None or dragged is self:
+            return False
+        self.window.reorder_clip(dragged, self)
+        self.window._dragged_row = None
+        self.remove_css_class("drop-target-highlight")
+        return True
+
+    def _on_drag_motion(self, target, x, y):
+        self.add_css_class("drop-target-highlight")
+        return Gdk.DragAction.MOVE
+
+    def _on_drag_leave(self, target):
+        self.remove_css_class("drop-target-highlight")
+
     def _on_rotation_changed(self, *_args):
         idx = self.rot_dropdown.get_selected()
         self.clip.rotation = ROTATIONS[idx][1]
+        # Invalidate cached thumbnail so it regenerates with the new rotation
+        old_thumb = thumbnail_path_for(self.clip)
+        if old_thumb.exists():
+            try:
+                old_thumb.unlink()
+            except OSError:
+                pass
+        self.window.load_thumbnail(self)
 
 
 class Encoder(GObject.Object):
@@ -810,6 +905,7 @@ class FuseWindow(Adw.ApplicationWindow):
         self.set_default_size(760, 620)
 
         self._rows: list[ClipRow] = []
+        self._dragged_row: "ClipRow | None" = None
         self._output_path: str | None = None
         self.encoder = Encoder()
         self.encoder.connect("progress", self._on_progress)
@@ -915,6 +1011,7 @@ class FuseWindow(Adw.ApplicationWindow):
         self.list_group.add(row)
         self._rows.append(row)
         self._refresh()
+        self.load_thumbnail(row)
 
     def _add_clip_at(self, clip: Clip, index: int):
         row = ClipRow(clip, self)
@@ -924,6 +1021,7 @@ class FuseWindow(Adw.ApplicationWindow):
         for r in self._rows:
             self.list_group.add(r)
         self._refresh()
+        self.load_thumbnail(row)
 
     def _insert_clip_sorted(self, clip: Clip):
         if clip.filmed_at is None:
@@ -937,11 +1035,51 @@ class FuseWindow(Adw.ApplicationWindow):
                 break
         self._add_clip_at(clip, insert_at)
 
+    # ---- thumbnails ----
+
+    def load_thumbnail(self, row: ClipRow):
+        target = thumbnail_path_for(row.clip)
+        if target.exists() and target.stat().st_size > 0:
+            GLib.idle_add(self._set_thumbnail, row, str(target))
+            return
+        threading.Thread(
+            target=self._thumbnail_worker, args=(row, target), daemon=True,
+        ).start()
+
+    def _thumbnail_worker(self, row: ClipRow, target: Path):
+        cmd = build_thumbnail_command(row.clip, target)
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+            GLib.idle_add(self._set_thumbnail, row, str(target))
+        except Exception:
+            pass
+
+    def _set_thumbnail(self, row: ClipRow, path: str):
+        try:
+            row.thumb_picture.set_file(Gio.File.new_for_path(path))
+            row.thumb_picture.set_visible(True)
+        except Exception:
+            pass
+
+    # ---- reorder ----
+
+    def reorder_clip(self, source_row: ClipRow, target_row: ClipRow):
+        if source_row is target_row:
+            return
+        source_idx = self._rows.index(source_row)
+        target_idx = self._rows.index(target_row)
+        self._rows.pop(source_idx)
+        self._rows.insert(target_idx, source_row)
+        for r in self._rows:
+            self.list_group.remove(r)
+        for r in self._rows:
+            self.list_group.add(r)
+
     # ---- preview ----
 
     def preview_clip(self, row: ClipRow):
         clip = row.clip
-        if clip.rotation == 0 and not clip.is_trimmed:
+        if clip.rotation == 0 and not clip.is_trimmed and not settings["enhance"]:
             self._launch_in_player(clip.path)
             return
         target = preview_path_for(clip)
@@ -950,6 +1088,9 @@ class FuseWindow(Adw.ApplicationWindow):
             return
         row.preview_btn.set_sensitive(False)
         row.preview_btn.set_tooltip_text("Preparing Preview…")
+        spinner = Gtk.Spinner()
+        spinner.start()
+        row.preview_btn.set_child(spinner)
         threading.Thread(
             target=self._preview_worker, args=(row, clip, target), daemon=True,
         ).start()
@@ -970,6 +1111,7 @@ class FuseWindow(Adw.ApplicationWindow):
     def _preview_done(self, row: ClipRow, path: str | None, error: str | None):
         row.preview_btn.set_sensitive(True)
         row.preview_btn.set_tooltip_text("Preview")
+        row.preview_btn.set_child(Gtk.Image.new_from_icon_name("media-playback-start-symbolic"))
         if error:
             self._show_error(f"Preview Failed\n\n{error}")
         elif path:
